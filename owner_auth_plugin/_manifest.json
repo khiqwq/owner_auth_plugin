@@ -5,14 +5,14 @@
   "description": "为麦麦机器人提供主人身份验证功能，在思考流程前验证发言者身份，兼容0.10.0版本",
   "author": {
     "name": "风花叶",
-    "url": "https://github.com/MaiM-with-u"
+    "url": "https://github.com/khiqwq"
   },
   "license": "GPL-v3.0-or-later",
   
   "host_application": {
     "min_version": "0.10.0"
   },
-  "homepage_url": "https://github.com/khiqwq",
+  "homepage_url": "https://github.com/khiqwq/owner_auth_plugin",
   "repository_url": "https://github.com/khiqwq/owner_auth_plugin",
   "keywords": ["authentication", "owner", "security", "identity", "patch"],
   "categories": ["Security", "Authentication"],
