@@ -13,9 +13,9 @@
 - 插件卸载时自动清理补丁
 
 作者：风花叶
-版本：1.1.0
+版本：1.1.1
 许可：GPL-v3.0-or-later
-兼容版本：麦麦机器人 v0.10.0+
+兼容版本：麦麦机器人 v0.10.2+
 """
 
 import time
@@ -167,20 +167,52 @@ def patch_build_prompt_reply_context() -> None:
         if _original_build_prompt_reply_context is None:
             _original_build_prompt_reply_context = DefaultReplyer.build_prompt_reply_context
         
-        async def patched_method(self: "DefaultReplyer", extra_info: str = "", reply_reason: str = "",
-                               available_actions: dict[str, ActionInfo] | None = None,
-                               choosen_actions: list[dict[str, object]] | None = None,
-                               enable_tool: bool = True,
-                               reply_message: dict[str, object] | None = None) -> tuple[str, list[int]]:
+        async def patched_method(
+            self: "DefaultReplyer",
+            *_,
+            extra_info: str = "",
+            reply_reason: str = "",
+            available_actions: dict[str, ActionInfo] | None = None,
+            choosen_actions: list[dict[str, object]] | None = None,
+            chosen_actions: list[dict[str, object]] | None = None,
+            enable_tool: bool = True,
+            reply_message: dict[str, object] | None = None,
+            **kwargs,
+        ) -> tuple[str, list[int]]:
+            # 兼容旧版/新版参数名差异
+            if choosen_actions is None and chosen_actions is not None:
+                choosen_actions = chosen_actions
 
             # 检查原始方法是否存在
             if _original_build_prompt_reply_context is None:
                 logger.error("[主人验证补丁] 原始方法未保存，无法调用")
                 return "", []
 
-            # 调用原始方法获取基础prompt
-            base_result = await _original_build_prompt_reply_context(self, extra_info, reply_reason,
-                                              available_actions, choosen_actions, enable_tool, reply_message)
+            # 调用原始方法获取基础prompt，兼容不同版本参数名
+            try:
+                base_result = await _original_build_prompt_reply_context(
+                    self,
+                    extra_info=extra_info,
+                    reply_reason=reply_reason,
+                    available_actions=available_actions,
+                    choosen_actions=choosen_actions,
+                    enable_tool=enable_tool,
+                    reply_message=reply_message,
+                )
+            except TypeError as te:
+                # 如果旧版本参数名不匹配，尝试使用新版 'chosen_actions'
+                if "unexpected keyword argument 'choosen_actions'" in str(te):
+                    base_result = await _original_build_prompt_reply_context(
+                        self,
+                        extra_info=extra_info,
+                        reply_reason=reply_reason,
+                        available_actions=available_actions,
+                        chosen_actions=choosen_actions,
+                        enable_tool=enable_tool,
+                        reply_message=reply_message,
+                    )
+                else:
+                    raise
             
             base_prompt, token_list = base_result
 
@@ -233,11 +265,11 @@ def patch_build_prompt_reply_context() -> None:
                             else:
                                 owner_qq = 0
                                 
-                            owner_nickname_config = self.get_config("owner_auth.owner_nickname", "风花叶")
+                            owner_nickname_config = self.get_config("owner_auth.owner_nickname", "主人")
                             if isinstance(owner_nickname_config, str):
                                 owner_nickname = owner_nickname_config
                             else:
-                                owner_nickname = str(owner_nickname_config) if owner_nickname_config is not None else "风花叶"
+                                owner_nickname = str(owner_nickname_config) if owner_nickname_config is not None else "主人"
                                 
                             auth_prompt = f"""
 
@@ -256,11 +288,11 @@ def patch_build_prompt_reply_context() -> None:
                             else:
                                 owner_qq = 0
                                 
-                            owner_nickname_config = self.get_config("owner_auth.owner_nickname", "风花叶")
+                            owner_nickname_config = self.get_config("owner_auth.owner_nickname", "主人")
                             if isinstance(owner_nickname_config, str):
                                 owner_nickname = owner_nickname_config
                             else:
-                                owner_nickname = str(owner_nickname_config) if owner_nickname_config is not None else "风花叶"
+                                owner_nickname = str(owner_nickname_config) if owner_nickname_config is not None else "主人"
                                 
                             auth_prompt = f"""
 
@@ -297,7 +329,7 @@ def patch_build_prompt_reply_context() -> None:
         # 替换原始方法 - 使用类型忽略来避免类型检查错误
         DefaultReplyer.build_prompt_reply_context = patched_method  # type: ignore[assignment]
         _patch_applied = True
-        logger.info("[主人验证补丁] 已成功应用prompt构建补丁 (v0.10.0兼容)")
+        logger.info("[主人验证补丁] 已成功应用prompt构建补丁 (v0.10.2兼容)")
         
     except ImportError as e:
         logger.error(f"[主人验证补丁] 无法导入DefaultReplyer模块: {e}")
@@ -357,8 +389,12 @@ class OwnerAuthHandler(BaseEventHandler):
     intercept_message: bool = False  # 不拦截消息，只进行身份验证
 
     @override
-    async def execute(self, message: MaiMessages) -> tuple[bool, bool, str]:
-        """执行主人身份验证"""
+    async def execute(self, message: MaiMessages) -> tuple[bool, bool, str, str | None]:
+        """执行主人身份验证
+
+        返回: (success, need_continue, result_msg, extra_info)
+        为兼容 MaiBot v0.10.2，这里使用四元组，其中 extra_info 预留给后续版本使用，默认返回 None。
+        """
         try:
             # 获取配置 - 使用安全的类型转换
             enable_auth_config = self.get_config("owner_auth.enable_auth", True)
@@ -370,7 +406,7 @@ class OwnerAuthHandler(BaseEventHandler):
                 enable_auth = True
             
             if not enable_auth:
-                return True, True, "身份验证已禁用"
+                return True, True, "身份验证已禁用", None
 
             # 获取主人QQ号配置 - 安全类型转换
             owner_qq_config = self.get_config("owner_auth.owner_qq", 2900218130)
@@ -382,11 +418,11 @@ class OwnerAuthHandler(BaseEventHandler):
                 owner_qq = 2900218130
             
             # 获取主人昵称配置 - 安全类型转换
-            owner_nickname_config = self.get_config("owner_auth.owner_nickname", "风花叶")
+            owner_nickname_config = self.get_config("owner_auth.owner_nickname", "主人")
             if isinstance(owner_nickname_config, str):
                 owner_nickname = owner_nickname_config
             else:
-                owner_nickname = str(owner_nickname_config) if owner_nickname_config is not None else "风花叶"
+                owner_nickname = str(owner_nickname_config) if owner_nickname_config is not None else "主人"
 
             # 获取发言者信息 - 安全类型转换
             user_id = message.message_base_info.get("user_id")
@@ -413,16 +449,21 @@ class OwnerAuthHandler(BaseEventHandler):
             else:
                 show_detailed = False
 
+            COLOR_DB = "\033[34m"
+            RESET_COLOR = "\033[0m"
             if debug_enabled:
-                print(f"[主人验证] 发言者QQ: {user_id}, 昵称: {user_nickname}, 群昵称: {user_cardname}")
-                print(f"[主人验证] 主人QQ: {owner_qq}, 主人昵称: {owner_nickname}")
-                print(f"[主人验证] 消息内容: {message.plain_text[:100]}...")
+                print(f"{COLOR_DB}====== 主人验证 DEBUG START ======{RESET_COLOR}")
+                print(f"{COLOR_DB}[主人验证] 发言者QQ: {user_id}, 昵称: {user_nickname}, 群昵称: {user_cardname}{RESET_COLOR}")
+                print(f"{COLOR_DB}[主人验证] 主人QQ: {owner_qq}, 主人昵称: {owner_nickname}{RESET_COLOR}")
+                preview = message.plain_text[:100] if message.plain_text else ""
+                print(f"{COLOR_DB}[主人验证] 消息内容: {preview}...{RESET_COLOR}")
+                print(f"{COLOR_DB}====== 主人验证 DEBUG END ======={RESET_COLOR}")
 
             # 检查用户ID是否存在
             if not user_id:
                 if debug_enabled:
                     print("[主人验证] 警告: 无法获取发言者QQ号")
-                return True, True, "无法获取发言者QQ号，跳过验证"
+                return True, True, "无法获取发言者QQ号，跳过验证", None
 
             # 验证身份
             try:
@@ -431,7 +472,7 @@ class OwnerAuthHandler(BaseEventHandler):
             except (ValueError, TypeError) as e:
                 error_msg = f"QQ号格式错误: {e}"
                 print(f"❌ [主人验证错误] {error_msg}")
-                return False, True, error_msg
+                return False, True, error_msg, None
 
             if user_id_int == owner_qq_int:
                 # 验证成功 - 这是主人
@@ -473,7 +514,7 @@ class OwnerAuthHandler(BaseEventHandler):
                 if debug_enabled:
                     print("[主人验证] 已存储主人身份验证信息")
 
-                return True, True, f"主人身份验证成功: {success_msg}"
+                return True, True, f"主人身份验证成功: {success_msg}", None
 
             else:
                 # 验证失败 - 不是主人
@@ -522,13 +563,13 @@ class OwnerAuthHandler(BaseEventHandler):
                 if debug_enabled:
                     print("[主人验证] 已存储非主人身份验证信息")
 
-                return True, True, f"非主人用户验证: {failure_msg}"
+                return True, True, f"非主人用户验证: {failure_msg}", None
 
         except Exception as e:
             error_msg = f"主人身份验证过程中发生错误: {str(e)}"
             print(f"❌ [主人验证错误] {error_msg}")
             # 即使验证出错，也不应该阻止消息处理
-            return True, True, error_msg
+            return True, True, error_msg, None
 
 # 为了向后兼容，保留这个函数
 def get_owner_auth_info(user_id: str) -> dict[str, object]:
@@ -572,12 +613,12 @@ class OwnerAuthPlugin(BasePlugin):
     config_schema = {
         "plugin": {
             "name": ConfigField(type=str, default="owner_auth_plugin", description="插件名称"),
-            "version": ConfigField(type=str, default="1.1.0", description="插件版本"),
+            "version": ConfigField(type=str, default="1.1.1", description="插件版本"),
             "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
         },
         "owner_auth": {
             "owner_qq": ConfigField(type=int, default=0, description="主人QQ号，请在此处填写您的QQ号"),
-            "owner_nickname": ConfigField(type=str, default="风花叶", description="主人昵称，改成你自己的QQ名，随便改也行，看的是QQ号"),
+            "owner_nickname": ConfigField(type=str, default="主人", description="主人昵称，改成你自己的QQ名"),
             "enable_auth": ConfigField(type=bool, default=True, description="是否启用身份验证"),
             "success_message": ConfigField(type=str, default="检测到主人身份，麦麦为您服务！", description="验证成功提示"),
             "failure_message": ConfigField(type=str, default="此人不是主人，请斟酌发言", description="验证失败提醒"),
@@ -598,7 +639,7 @@ class OwnerAuthPlugin(BasePlugin):
         try:
             result = apply_owner_auth_patch()
             if result:
-                print("[主人验证插件] prompt补丁应用成功 (v0.10.0兼容)")
+                print("[主人验证插件] prompt补丁应用成功 (v0.10.2兼容)")
                 # 测试补丁是否真的生效
                 self._test_patch()
             else:
@@ -631,7 +672,7 @@ class OwnerAuthPlugin(BasePlugin):
 
     def on_plugin_load(self) -> None:
         """插件加载时的回调"""
-        print("[主人验证插件] 插件加载完成 (v0.10.0兼容)")
+        print("[主人验证插件] 插件加载完成 (v0.10.2兼容)")
         
     def on_plugin_unload(self) -> None:
         """插件卸载时的回调 - 移除补丁"""
