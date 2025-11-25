@@ -60,7 +60,7 @@ log_auth_result = true
 success_message = "检测到用户身份，麦麦为您服务！"
 failure_message = "此人不是特定用户，请斟酌发言"
 
-# 第1个用户的配置（示例：主人）
+# 第1个用户的配置（示例）
 nickname1 = "主人"
 owner_qq1 = 123456789
 prompt_template1 = """
@@ -122,7 +122,7 @@ User = 2  # 从1改为2
 [owner_auth]
 User = 2
 
-# 第1个用户（示例：主人）
+# 第1个用户（示例）
 nickname1 = "主人"
 owner_qq1 = 123456789
 prompt_template1 = """
@@ -131,7 +131,7 @@ prompt_template1 = """
 请以主人的身份对待此人，可以更加亲切和详细地回应。
 """
 
-# 第2个用户（示例：妈妈）
+# 第2个用户（示例）
 nickname2 = "妈妈"
 owner_qq2 = 987654321
 prompt_template2 = """
@@ -174,7 +174,7 @@ enable_auth = true
 log_auth_result = true
 
 # 第1个用户
-nickname1 = "主人"（示例：主人）
+nickname1 = "主人"（示例）
 owner_qq1 = 123456789
 prompt_template1 = """
 【确认主人身份】：当前发言者是你的真正主人{display_name}(QQ:{owner_qq})
@@ -183,7 +183,7 @@ prompt_template1 = """
 """
 
 # 第2个用户
-nickname2 = "妈妈"（示例：妈妈）
+nickname2 = "妈妈"（示例）
 owner_qq2 = 987654321
 prompt_template2 = """
 【确认妈妈身份】：当前发言者是你的真正妈妈{display_name}(QQ:{owner_qq})
