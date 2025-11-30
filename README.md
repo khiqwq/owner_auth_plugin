@@ -46,7 +46,7 @@
 ### [plugin] 插件基本信息
 ```toml
 name = "owner_auth_plugin"     # 插件名称
-version = "1.2.1"              # 插件版本
+version = "1.3.0"              # 插件版本
 enabled = true                 # 是否启用插件
 ```
 
