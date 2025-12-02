@@ -369,7 +369,12 @@ class OwnerAuthPlugin(BasePlugin):
     dependencies: list[str] = []
     python_dependencies: list[str] = ["typing-extensions>=4.8.0"]
     config_file_name: str = "config.toml"
-    config_section_descriptions = {"plugin": "插件基本信息", "owner_auth": "用户身份验证配置", "user1": "第1个用户的配置", "debug": "调试配置"}
+    config_section_descriptions = {
+        "plugin": "插件基本信息配置",
+        "owner_auth": "用户身份验证功能配置（控制验证行为和提示词）",
+        "user1": "第1个用户的配置（昵称、QQ号、提示词模板）",
+        "debug": "调试功能配置（开发者选项）"
+    }
     config_schema = {
         "plugin": {
             "name": ConfigField(type=str, default="owner_auth_plugin", description="插件名称"),
@@ -423,15 +428,29 @@ class OwnerAuthPlugin(BasePlugin):
             if not isinstance(user_count, int) or user_count < 1:
                 user_count = 1
             
-            # 动态添加schema节
+            # 动态添加schema节和描述
             for i in range(2, user_count + 1):
-                if f"user{i}" not in self.config_schema:
-                    self.config_section_descriptions[f"user{i}"] = f"第{i}个用户的配置"
-                    self.config_schema[f"user{i}"] = {
+                section_key = f"user{i}"
+                if section_key not in self.config_schema:
+                    # 添加节描述
+                    self.config_section_descriptions[section_key] = f"第{i}个用户的配置（昵称、QQ号、提示词模板）"
+                    
+                    # 添加schema定义
+                    self.config_schema[section_key] = {
                         "nickname": ConfigField(type=str, default="用户", description="用户的昵称"),
                         "owner_qq": ConfigField(type=int, default=0, description="用户的QQ号"),
                         "prompt_template": ConfigField(type=str, default="【确认用户身份】：当前发言者是你的真正用户{display_name}(QQ:{owner_qq})，{msg}\n✅ 身份验证通过\n请以用户的身份对待此人。", description="用户的提示词模板，支持占位符: {display_name}, {owner_qq}, {msg}, {owner_nickname}")
                     }
+                    logger.info(f"[用户验证插件] 已动态添加 [{section_key}] 节到 config_schema")
+            
+            # 清理多余的schema节（如果User从3改回1）
+            for i in range(user_count + 1, 10):
+                section_key = f"user{i}"
+                if section_key in self.config_schema:
+                    del self.config_schema[section_key]
+                    if section_key in self.config_section_descriptions:
+                        del self.config_section_descriptions[section_key]
+                    logger.info(f"[用户验证插件] 已从 config_schema 中移除 [{section_key}] 节")
             
             # 检查配置文件中是否需要添加或删除字段
             config_file = os.path.join(os.path.dirname(__file__), self.config_file_name)
