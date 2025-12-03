@@ -252,13 +252,28 @@ class OwnerAuthHandler(BaseEventHandler):
             if not isinstance(user_count, int) or user_count < 1:
                 user_count = 1
             
+            # 获取调试配置
+            dbg_cfg = self.get_config("debug.enable_debug", False)
+            debug_enabled = bool(dbg_cfg) if isinstance(dbg_cfg, (bool, int, str)) else False
+            
             owners_dict = {}
             for i in range(1, user_count + 1):
                 qq = self.get_config(f"user{i}.owner_qq", 0)
+                nickname = self.get_config(f"user{i}.nickname", "用户")
+                if debug_enabled:
+                    logger.debug(f"[用户验证] 读取user{i}: owner_qq={qq}, nickname={nickname}")
+                
                 if qq and str(qq).isdigit() and int(qq) > 0:
-                    nickname = self.get_config(f"user{i}.nickname", "用户")
                     prompt_template = self.get_config(f"user{i}.prompt_template", "")
-                    owners_dict[int(qq)] = {"nickname": str(nickname) if nickname else "用户", "prompt_template": str(prompt_template) if prompt_template else ""}
+                    # 将双花括号替换为单花括号（TOML中的转义）
+                    if prompt_template:
+                        prompt_template = str(prompt_template).replace("{{", "{").replace("}}", "}")
+                    owners_dict[int(qq)] = {"nickname": str(nickname) if nickname else "用户", "prompt_template": prompt_template}
+                    if debug_enabled:
+                        logger.info(f"[用户验证] 已加载用户{i}: {nickname}(QQ:{qq})")
+                else:
+                    if debug_enabled:
+                        logger.warning(f"[用户验证] user{i} 的QQ号无效或未配置: {qq}")
             
             if not owners_dict:
                 return True, True, "未配置用户，跳过验证", None, message
@@ -427,11 +442,11 @@ class OwnerAuthPlugin(BasePlugin):
         # 应用monkey patching以注入提示词
         try:
             if apply_owner_auth_patch():
-                print("[用户验证插件] ✅ 补丁已在__init__中应用")
+                logger.info("[用户验证插件] ✅ 补丁已在__init__中应用")
             else:
-                print("[用户验证插件] ⚠️ 补丁应用失败")
+                logger.warning("[用户验证插件] ⚠️ 补丁应用失败")
         except Exception as e:
-            print(f"[用户验证插件] ❌ 应用补丁时出错: {e}")
+            logger.error(f"[用户验证插件] ❌ 应用补丁时出错: {e}")
 
     def _dynamic_generate_config_fields(self) -> None:
         """动态生成配置字段并写入配置文件"""
