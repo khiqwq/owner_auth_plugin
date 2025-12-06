@@ -4,16 +4,14 @@
 
 关键安全修复：
 - 只通过 user_id（QQ号）进行精确匹配，不通过名称匹配
-- 拦截 build_prompt_reply_context 方法，从 reply_message 获取真正的 user_id
+- 拦截 format_prompt 方法，从缓存中查找最新的匹配条目
 - 防止名称冒充攻击
 """
 
 import time
-from typing import Callable, Coroutine
 
 # 全局变量
-_original_group_replyer: Callable[..., Coroutine[object, object, tuple[str, list[int]]]] | None = None
-_original_private_replyer: Callable[..., Coroutine[object, object, tuple[str, list[int]]]] | None = None
+_original_format_prompt = None
 _patch_applied = False
 
 # 导入日志和缓存函数（将由主模块提供）
@@ -27,60 +25,119 @@ def init_patch_manager(logger, get_all_auth_info_func, debug_enabled=False):
     _logger = logger
     _get_all_auth_info = get_all_auth_info_func
     _debug_enabled = debug_enabled
+    if _logger:
+        _logger.debug(f"[用户验证补丁] patch_manager 已初始化，debug={debug_enabled}")
 
 def debug_log(msg: str) -> None:
     """条件调试日志"""
     if _debug_enabled and _logger:
         _logger.debug(msg)
 
-def _build_prefix_by_user_id(user_id_str: str, display_name: str = "") -> str | None:
-    """根据 user_id 精确查找缓存并生成前置提示（用户 or 非用户）。
+def _find_user_id_by_sender_name(sender_name: str, cache: dict) -> str | None:
+    """从缓存中通过 sender_name 查找 user_id
     
-    关键安全措施：只通过 user_id 进行精确匹配，不通过名称匹配，防止冒充攻击。
+    安全策略：
+    - 只匹配最近60秒内的缓存（避免使用过期数据）
+    - 同时检查 display_name 和 person_name
+    - 返回 user_id，后续通过 user_id 精确查找完整信息
+    
+    Args:
+        sender_name: 发送者名称（来自 Replyer 的 sender_name 参数）
+        cache: 身份验证缓存字典
+    
+    Returns:
+        str | None: 找到的 user_id，如果没有匹配则返回 None
+    """
+    if not sender_name or not cache:
+        return None
+    
+    now = time.time()
+    candidates = []
+    expired_count = 0
+    
+    # 遍历缓存，查找匹配的条目
+    for uid, info in cache.items():
+        timestamp = info.get('timestamp', 0)
+        age = now - timestamp
+        
+        # 只考虑最近60秒内的缓存
+        if age > 60:
+            expired_count += 1
+            continue
+        
+        display_name = str(info.get('display_name', ''))
+        person_name = str(info.get('person_name', ''))
+        
+        # 检查是否匹配（精确匹配和模糊匹配）
+        exact_match = (sender_name == person_name or sender_name == display_name)
+        fuzzy_match = (
+            (person_name and sender_name.replace(' ', '') == person_name.replace(' ', '')) or
+            (display_name and sender_name.replace(' ', '') == display_name.replace(' ', ''))
+        )
+        
+        if exact_match or fuzzy_match:
+            candidates.append((uid, timestamp))
+            # 只在找到匹配时输出日志
+            match_type = "精确" if exact_match else "模糊"
+            if _logger:
+                _logger.debug(f"[用户验证补丁] ✅ 找到{match_type}匹配: sender_name={sender_name} -> user_id={uid} (年龄={age:.1f}秒)")
+    
+    if not candidates:
+        # 只在调试模式下输出详细信息
+        if _debug_enabled and _logger:
+            _logger.debug(f"[用户验证补丁] ❌ 未找到 sender_name={sender_name} 的匹配 (缓存总数={len(cache)}, 过期={expired_count})")
+        return None
+    
+    # 返回时间戳最新的那个
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    user_id = candidates[0][0]
+    return user_id
+
+
+def _build_prefix_by_user_id(user_id_str: str, sender_name: str = "") -> str | None:
+    """根据 user_id 精确查找缓存并生成前置提示（用户 or 非用户）。
     
     Args:
         user_id_str: 用户的QQ号（字符串）
-        display_name: 显示名称（仅用于日志和模板格式化，不用于匹配）
+        sender_name: 显示名称（用于模板格式化）
     
     Returns:
         str | None: 生成的提示词前缀，如果没有缓存则返回 None
     """
     if not user_id_str:
-        debug_log(f"[用户验证补丁] user_id 为空，跳过注入")
         return None
     
     if _get_all_auth_info is None:
-        debug_log(f"[用户验证补丁] 缓存函数未初始化")
         return None
     
     cache = _get_all_auth_info()
     
     if not cache:
-        debug_log(f"[用户验证补丁] 缓存为空，跳过注入")
         return None
     
-    debug_log(f"[用户验证补丁] 精确查找缓存: user_id={user_id_str}, 缓存数量={len(cache)}, 缓存keys={list(cache.keys())}")
-    
-    # 关键：只通过 user_id 精确匹配，不通过名称匹配
+    # 关键：只通过 user_id 精确匹配
     if user_id_str not in cache:
-        debug_log(f"[用户验证补丁] ⚠️ 缓存中不存在 user_id={user_id_str}，跳过注入")
+        if _debug_enabled and _logger:
+            _logger.debug(f"[用户验证补丁] ⚠️ 缓存中不存在 user_id={user_id_str}")
         return None
     
     info = cache[user_id_str]
     
     # 检查缓存是否过期（5分钟）
-    if (time.time() - info['timestamp']) > 300:
-        debug_log(f"[用户验证补丁] 缓存已过期 (user_id={user_id_str})，跳过注入")
+    age = time.time() - info.get('timestamp', 0)
+    if age > 300:
+        if _debug_enabled and _logger:
+            _logger.debug(f"[用户验证补丁] 缓存已过期: user_id={user_id_str}, 年龄={age:.1f}秒")
         return None
     
     is_owner = bool(info.get('is_owner', False))
     cached_display_name = str(info.get('display_name', '未知用户'))
-    # 优先使用传入的 display_name（来自 Person.person_name），否则使用缓存中的
-    final_display_name = display_name or cached_display_name
+    cached_person_name = str(info.get('person_name', ''))
+    # 优先使用传入的 sender_name，否则使用缓存中的 person_name 或 display_name
+    final_display_name = sender_name or cached_person_name or cached_display_name
     
     user_message = str(info.get('user_message', ''))
     if not user_message:
-        debug_log(f"[用户验证补丁] user_message 为空，跳过注入")
         return None
     
     if is_owner:
@@ -97,9 +154,9 @@ def _build_prefix_by_user_id(user_id_str: str, display_name: str = "") -> str | 
                 display_name=final_display_name,
                 owner_qq=owner_qq,
                 msg=user_message,
-                owner_nickname=owner_nickname
+                owner_nickname=owner_nickname,
+                user=final_display_name
             )
-            debug_log(f"[用户验证补丁] ✅ 生成用户提示词: {owner_nickname}(QQ:{owner_qq})")
             return f"\n\n{prompt}\n\n"
         except KeyError as e:
             if _logger:
@@ -121,9 +178,9 @@ def _build_prefix_by_user_id(user_id_str: str, display_name: str = "") -> str | 
             prompt = template.format(
                 msg=user_message,
                 display_name=final_display_name,
-                user_qq=user_qq
+                user_qq=user_qq,
+                user=final_display_name
             )
-            debug_log(f"[用户验证补丁] ✅ 生成非用户警告提示词: {final_display_name}(QQ:{user_qq})")
             return f"\n\n{prompt}\n\n"
         except Exception as e:
             if _logger:
@@ -131,83 +188,15 @@ def _build_prefix_by_user_id(user_id_str: str, display_name: str = "") -> str | 
             return None
 
 
-def _create_wrapper(orig_fn):
-    """创建 build_prompt_reply_context 的包装器
-    
-    从 reply_message 获取真正的 user_id，然后用 user_id 精确查找缓存。
-    """
-    async def _wrapped(self, *args, **kwargs):
-        debug_log(f"[用户验证补丁] build_prompt_reply_context 被调用")
-        
-        # 处理参数兼容性
-        if "choosen_actions" not in kwargs and "chosen_actions" in kwargs:
-            kwargs["choosen_actions"] = kwargs["chosen_actions"]
-        
-        # 调用原始方法
-        try:
-            base_prompt, token_list = await orig_fn(self, *args, **kwargs)
-        except TypeError:
-            base_ret = await orig_fn(self, *args)
-            if isinstance(base_ret, tuple) and len(base_ret) == 2:
-                base_prompt, token_list = base_ret
-            else:
-                base_prompt, token_list = str(base_ret), []
-        
-        # 关键：从 reply_message 获取真正的 user_id
-        reply_message = kwargs.get("reply_message")
-        if reply_message is None and len(args) > 0:
-            reply_message = args[0]
-        
-        user_id_str = ""
-        display_name = ""
-        
-        if reply_message:
-            try:
-                if hasattr(reply_message, 'user_info') and reply_message.user_info:
-                    user_id_str = str(reply_message.user_info.user_id)
-                    debug_log(f"[用户验证补丁] 从 reply_message.user_info 获取 user_id={user_id_str}")
-                    
-                    # 尝试获取显示名称
-                    if hasattr(reply_message.user_info, 'user_nickname'):
-                        display_name = str(reply_message.user_info.user_nickname or "")
-                    if hasattr(reply_message.user_info, 'user_cardname'):
-                        cardname = str(reply_message.user_info.user_cardname or "")
-                        if cardname:
-                            display_name = cardname
-            except Exception as e:
-                if _logger:
-                    _logger.warning(f"[用户验证补丁] 获取 user_id 失败: {e}")
-        
-        if not user_id_str:
-            debug_log(f"[用户验证补丁] 无法获取 user_id，跳过注入")
-            return base_prompt, token_list
-        
-        # 使用 user_id 精确查找缓存并生成提示词
-        prefix = _build_prefix_by_user_id(user_id_str, display_name)
-        
-        if prefix:
-            if _logger:
-                _logger.info(f"[用户验证补丁] ✅ 成功注入提示词（user_id={user_id_str}）")
-            final_prompt = prefix + (base_prompt or "")
-            return final_prompt, token_list
-        else:
-            debug_log(f"[用户验证补丁] 未生成提示词，返回原始 prompt")
-        
-        return base_prompt, token_list
-    
-    _wrapped._owner_patched = True
-    return _wrapped
-
-
 def apply_patch() -> bool:
-    """应用补丁：拦截 build_prompt_reply_context 方法
+    """应用补丁：拦截 format_prompt 方法，在 replyer_prompt 时注入提示词
     
-    关键安全措施：
-    - 拦截 build_prompt_reply_context 而不是 format_prompt
-    - 因为 build_prompt_reply_context 有 reply_message 参数，可以获取真正的 user_id
-    - 只通过 user_id 精确匹配，不通过名称匹配，防止冒充攻击
+    策略：
+    - 从 kwargs.sender_name 获取发送者名称
+    - 在缓存中查找最近5秒内匹配的 user_id
+    - 通过 user_id 精确查找完整信息并生成提示词
     """
-    global _original_group_replyer, _original_private_replyer, _patch_applied
+    global _original_format_prompt, _patch_applied
     
     if _patch_applied:
         if _logger:
@@ -218,87 +207,89 @@ def apply_patch() -> bool:
         print("[用户验证补丁] 错误：logger未初始化")
         return False
 
-    patched_count = 0
-    
-    # 拦截 GroupReplyer.build_prompt_reply_context
     try:
-        from src.chat.replyer.group_generator import DefaultReplyer as GroupReplyer
+        from src.chat.utils.prompt_builder import global_prompt_manager
         
-        if not getattr(GroupReplyer.build_prompt_reply_context, '_owner_patched', False):
-            _original_group_replyer = GroupReplyer.build_prompt_reply_context
-            GroupReplyer.build_prompt_reply_context = _create_wrapper(_original_group_replyer)
-            patched_count += 1
-            if _logger:
-                _logger.debug("[用户验证补丁] 已拦截 GroupReplyer.build_prompt_reply_context")
-    except Exception as e:
         if _logger:
-            _logger.warning(f"[用户验证补丁] 拦截 GroupReplyer 失败: {e}")
-    
-    # 拦截 PrivateReplyer.build_prompt_reply_context
-    try:
-        from src.chat.replyer.private_generator import PrivateReplyer
+            _logger.debug(f"[用户验证补丁] 准备应用补丁")
         
-        if not getattr(PrivateReplyer.build_prompt_reply_context, '_owner_patched', False):
-            _original_private_replyer = PrivateReplyer.build_prompt_reply_context
-            PrivateReplyer.build_prompt_reply_context = _create_wrapper(_original_private_replyer)
-            patched_count += 1
-            if _logger:
-                _logger.debug("[用户验证补丁] 已拦截 PrivateReplyer.build_prompt_reply_context")
-    except Exception as e:
-        if _logger:
-            _logger.warning(f"[用户验证补丁] 拦截 PrivateReplyer 失败: {e}")
-    
-    if patched_count > 0:
+        # 保存原始 format_prompt 方法
+        _original_format_prompt = global_prompt_manager.format_prompt
+        
+        # 创建包装函数
+        async def _wrapped_format_prompt(name: str, **kwargs):
+            # 调用原始方法
+            result = await _original_format_prompt(name, **kwargs)
+            
+            # 只在 replyer_prompt 时注入
+            if name == "replyer_prompt":
+                # 从 kwargs 获取 sender_name
+                sender_name = kwargs.get("sender_name", "")
+                
+                if not sender_name:
+                    return result
+                
+                # 从缓存中查找匹配的 user_id
+                cache = _get_all_auth_info() if _get_all_auth_info else {}
+                user_id_str = _find_user_id_by_sender_name(sender_name, cache)
+                
+                if not user_id_str:
+                    # 只在调试模式下输出
+                    if _debug_enabled and _logger:
+                        _logger.debug(f"[用户验证补丁] 未找到 sender_name={sender_name} 的匹配缓存")
+                    return result
+                
+                # 使用 user_id 精确查找缓存并生成提示词
+                prefix = _build_prefix_by_user_id(user_id_str, sender_name)
+                
+                if prefix:
+                    if _logger:
+                        _logger.info(f"[用户验证补丁] ✅ 成功注入提示词（user_id={user_id_str}, sender_name={sender_name}）")
+                    result = prefix + result
+                elif _debug_enabled and _logger:
+                    _logger.debug(f"[用户验证补丁] ⚠️ 未生成提示词（user_id={user_id_str}）")
+            
+            return result
+        
+        # 替换方法
+        global_prompt_manager.format_prompt = _wrapped_format_prompt
         _patch_applied = True
-        _logger.info(f"[用户验证补丁] ✅ 已成功应用（拦截了 {patched_count} 个 Replyer）")
+        _logger.info("[用户验证补丁] ✅ 已成功应用（拦截 format_prompt 方法）")
         return True
-    else:
+        
+    except Exception as e:
         if _logger:
-            _logger.error("[用户验证补丁] ❌ 未能拦截任何 Replyer")
+            _logger.error(f"[用户验证补丁] 应用失败: {e}")
+        import traceback
+        if _logger:
+            _logger.error(f"[用户验证补丁] 错误堆栈: {traceback.format_exc()}")
         return False
 
 
 def remove_patch() -> bool:
     """移除补丁，恢复原始方法"""
-    global _original_group_replyer, _original_private_replyer, _patch_applied
+    global _original_format_prompt, _patch_applied
     
     if not _patch_applied:
         if _logger:
             _logger.debug("[用户验证补丁] 补丁未应用，无需移除")
         return True
     
-    removed_count = 0
-    
     try:
-        from src.chat.replyer.group_generator import DefaultReplyer as GroupReplyer
-        if _original_group_replyer is not None:
-            GroupReplyer.build_prompt_reply_context = _original_group_replyer
-            removed_count += 1
-            if _logger:
-                _logger.debug("[用户验证补丁] 已恢复 GroupReplyer.build_prompt_reply_context")
+        from src.chat.utils.prompt_builder import global_prompt_manager
+        
+        if _original_format_prompt is not None:
+            global_prompt_manager.format_prompt = _original_format_prompt
+            _logger.info("[用户验证补丁] 已成功移除")
     except Exception as e:
         if _logger:
-            _logger.debug(f"[用户验证补丁] 恢复 GroupReplyer 失败: {e}")
-    
-    try:
-        from src.chat.replyer.private_generator import PrivateReplyer
-        if _original_private_replyer is not None:
-            PrivateReplyer.build_prompt_reply_context = _original_private_replyer
-            removed_count += 1
-            if _logger:
-                _logger.debug("[用户验证补丁] 已恢复 PrivateReplyer.build_prompt_reply_context")
-    except Exception as e:
-        if _logger:
-            _logger.debug(f"[用户验证补丁] 恢复 PrivateReplyer 失败: {e}")
+            _logger.error(f"[用户验证补丁] 移除失败: {e}")
+        return False
     
     _patch_applied = False
-    _original_group_replyer = None
-    _original_private_replyer = None
+    _original_format_prompt = None
     
-    if removed_count > 0 and _logger:
-        _logger.info(f"[用户验证补丁] 已成功移除（恢复了 {removed_count} 个方法）")
-    
-    return removed_count > 0
+    return True
 
 
 def is_patch_applied() -> bool:
