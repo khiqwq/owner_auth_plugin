@@ -179,18 +179,17 @@ class AuthInfo(TypedDict):
     prompt_template: str
     user_qq: str
     user_message: str
-    person_name: str  # 新增：Person 对象的名称（用于与 Replyer 中的 sender_name 匹配）
 
 _global_auth_cache: dict[str, AuthInfo] = {}
 
-def store_auth_info(user_id: str, is_owner: bool, message: str, display_name: str, owner_qq: int = 0, owner_nickname: str = "用户", prompt_template: str = "", user_message: str = "", person_name: str = "") -> None:
+def store_auth_info(user_id: str, is_owner: bool, message: str, display_name: str, owner_qq: int = 0, owner_nickname: str = "用户", prompt_template: str = "", user_message: str = "") -> None:
     global _global_auth_cache
     _global_auth_cache[user_id] = {
         'is_owner': is_owner, 'message': message, 'display_name': display_name, 'timestamp': time.time(),
         'owner_qq': owner_qq, 'owner_nickname': owner_nickname, 'prompt_template': prompt_template,
-        'user_qq': user_id, 'user_message': user_message, 'person_name': person_name
+        'user_qq': user_id, 'user_message': user_message
     }
-    logger.debug(f"[用户验证缓存] 存储: user_id={user_id}, display_name={display_name}, person_name={person_name}, is_owner={is_owner}, user_message={user_message[:50] if user_message else ''}...")
+    logger.debug(f"[用户验证缓存] 存储: user_id={user_id}, display_name={display_name}, is_owner={is_owner}, user_message={user_message[:50] if user_message else ''}...")
     now = time.time()
     for k in [k for k, v in _global_auth_cache.items() if now - v['timestamp'] > 300]:
         _global_auth_cache.pop(k, None)
@@ -309,19 +308,6 @@ class OwnerAuthHandler(BaseEventHandler):
             except (ValueError, TypeError) as e:
                 return False, True, f"QQ号格式错误: {e}", None, message
 
-            # 获取 Person.person_name（与 Replyer 中的 sender_name 一致）
-            person_name_for_cache = ""
-            try:
-                from src.person_info.person_info import Person
-                platform = str(message.message_base_info.get("platform", "qq"))
-                person_obj = Person(platform=platform, user_id=str(user_id))
-                person_name_for_cache = person_obj.person_name or ""
-                if debug_enabled:
-                    print(f"[用户验证] Person.person_name={person_name_for_cache}")
-            except Exception as e:
-                if debug_enabled:
-                    print(f"[用户验证] 获取 Person.person_name 失败: {e}")
-
             if user_id_int in owner_qq_list:
                 owner_info = owners_dict[user_id_int]
                 owner_nickname = owner_info["nickname"]
@@ -351,7 +337,7 @@ class OwnerAuthHandler(BaseEventHandler):
                 user_actual_message = getattr(message, 'plain_text', '') or str(message.message_base_info.get('raw_message', ''))
                 
                 
-                store_auth_info(str(user_id), True, success_msg, display_name, owner_qq=user_id_int, owner_nickname=owner_nickname, prompt_template=owner_prompt, user_message=user_actual_message, person_name=person_name_for_cache)
+                store_auth_info(str(user_id), True, success_msg, display_name, owner_qq=user_id_int, owner_nickname=owner_nickname, prompt_template=owner_prompt, user_message=user_actual_message)
                 return True, True, f"用户身份验证成功: {success_msg}", None, message
 
             else:
@@ -381,7 +367,7 @@ class OwnerAuthHandler(BaseEventHandler):
                 # 读取非用户提示词模板
                 non_owner_template = self.get_config("owner_auth.non_owner_prompt_template", "")
                 
-                store_auth_info(str(user_id), False, detailed_failure_msg, display_name, owner_qq=0, owner_nickname="", prompt_template=non_owner_template, user_message=user_actual_message, person_name=person_name_for_cache)
+                store_auth_info(str(user_id), False, detailed_failure_msg, display_name, owner_qq=0, owner_nickname="", prompt_template=non_owner_template, user_message=user_actual_message)
                 return True, True, f"非用户用户验证: {failure_msg}", None, message
 
         except Exception as e:
@@ -606,22 +592,22 @@ class OwnerAuthPlugin(BasePlugin):
     def on_plugin_load(self) -> None:
         try:
             if apply_owner_auth_patch():
-                logger.info("[用户验证插件] ✅ 补丁应用成功（插件已加载）")
+                print("[用户验证插件] ✅ 补丁应用成功（插件已加载）")
             else:
-                logger.warning("[用户验证插件] ⚠️ 补丁应用失败")
+                print("[用户验证插件] ⚠️ 补丁应用失败")
         except Exception as e:
-            logger.error(f"[用户验证插件] ❌ 加载补丁时出错: {e}")
+            print(f"[用户验证插件] ❌ 加载补丁时出错: {e}")
 
     def on_plugin_unload(self) -> None:
         try:
             if remove_owner_auth_patch():
-                logger.info("[用户验证插件] 补丁已成功移除")
+                print("[用户验证插件] 补丁已成功移除")
             else:
-                logger.warning("[用户验证插件] 补丁移除失败或未应用")
+                print("[用户验证插件] 补丁移除失败或未应用")
         except Exception as e:
-            logger.error(f"[用户验证插件] 卸载补丁时出错: {e}")
+            print(f"[用户验证插件] 卸载补丁时出错: {e}")
         _global_auth_cache.clear()
-        logger.info("[用户验证插件] 已清理身份验证缓存")
+        print("[用户验证插件] 已清理身份验证缓存")
 
     def on_plugin_disable(self) -> None:
         try:
