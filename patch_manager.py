@@ -9,6 +9,7 @@
 """
 
 import time
+import types
 
 # 全局变量
 _original_format_prompt = None
@@ -217,12 +218,12 @@ def apply_patch() -> bool:
         _original_format_prompt = global_prompt_manager.format_prompt
         
         # 创建包装函数
-        async def _wrapped_format_prompt(name: str, **kwargs):
+        async def _wrapped_format_prompt(self, name: str, **kwargs):
             # 调用原始方法
             result = await _original_format_prompt(name, **kwargs)
             
-            # 只在 replyer_prompt 时注入
-            if name == "replyer_prompt":
+            # 只在 replyer_prompt 或 replyer_prompt_0 时注入
+            if name in ("replyer_prompt", "replyer_prompt_0"):
                 # 从 kwargs 获取 sender_name
                 sender_name = kwargs.get("sender_name", "")
                 
@@ -251,8 +252,8 @@ def apply_patch() -> bool:
             
             return result
         
-        # 替换方法
-        global_prompt_manager.format_prompt = _wrapped_format_prompt
+        # 替换方法（使用 MethodType 绑定为实例方法）
+        global_prompt_manager.format_prompt = types.MethodType(_wrapped_format_prompt, global_prompt_manager)
         _patch_applied = True
         _logger.info("[用户验证补丁] ✅ 已成功应用（拦截 format_prompt 方法）")
         return True
