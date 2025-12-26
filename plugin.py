@@ -150,6 +150,9 @@ try:
     EventType = ps.EventType
     MaiMessages = ps.MaiMessages
     ConfigField = ps.ConfigField
+    ConfigLayout = getattr(ps, "ConfigLayout", None)
+    ConfigTab = getattr(ps, "ConfigTab", None)
+    ConfigSection = getattr(ps, "ConfigSection", None)
     EventHandlerInfo = ps.EventHandlerInfo
     ActionInfo = ps.ActionInfo
     BaseAction = ps.BaseAction
@@ -212,7 +215,7 @@ logger = get_logger("owner_auth_patch")
 
 try:
     from . import patch_manager
-    patch_manager.init_patch_manager(logger, get_all_auth_info, False)
+    patch_manager.init_patch_manager(logger, get_all_auth_info, False, True)
 except ImportError as e:
     logger.error(f"无法导入patch_manager: {e}")
     patch_manager = None
@@ -399,11 +402,19 @@ class OwnerAuthPlugin(BasePlugin):
     python_dependencies: list[str] = ["typing-extensions>=4.8.0"]
     config_file_name: str = "config.toml"
     config_section_descriptions = {
-        "plugin": "插件基本信息配置",
-        "owner_auth": "用户身份验证功能配置（控制验证行为和提示词）",
-        "user1": "第1个用户的配置（昵称、QQ号、提示词模板）",
-        "debug": "调试功能配置（开发者选项）"
+        "plugin": ConfigSection(title="插件设置", description="插件基本信息配置", icon="settings", collapsed=True, order=1) if ConfigSection else "插件基本信息配置",
+        "owner_auth": ConfigSection(title="身份验证", description="用户身份验证功能配置", icon="shield", collapsed=True, order=2) if ConfigSection else "用户身份验证功能配置",
+        "user1": ConfigSection(title="用户1配置", description="第1个用户的配置", icon="user", collapsed=True, order=3) if ConfigSection else "第1个用户的配置",
+        "debug": ConfigSection(title="调试选项", description="开发者调试功能", icon="bug", collapsed=True, order=99) if ConfigSection else "调试功能配置"
     }
+    config_layout = ConfigLayout(
+        type="tabs",
+        tabs=[
+            ConfigTab(id="basic", title="基础设置", sections=["plugin", "owner_auth"], icon="settings", order=1),
+            ConfigTab(id="users", title="用户管理", sections=["user1"], icon="users", order=2),
+            ConfigTab(id="advanced", title="高级", sections=["debug"], icon="tool", order=3),
+        ]
+    ) if ConfigLayout and ConfigTab else None
     config_schema = {
         "plugin": {
             "name": ConfigField(type=str, default="owner_auth_plugin", description="插件名称"),
@@ -414,6 +425,7 @@ class OwnerAuthPlugin(BasePlugin):
         "owner_auth": {
             "User": ConfigField(type=int, default=1, description="用户数量（修改后重启生效，会自动生成对应数量的配置字段）"),
             "enable_auth": ConfigField(type=bool, default=True, description="是否启用身份验证"),
+            "enable_private_inject": ConfigField(type=bool, default=True, description="是否在私聊环境中注入身份验证提示词"),
             "log_auth_result": ConfigField(type=bool, default=True, description="是否记录验证结果"),
             "success_message": ConfigField(type=str, default="检测到用户身份，麦麦为您服务！", description="验证成功提示（控制台显示）"),
             "failure_message": ConfigField(type=str, default="此人不是用户，请斟酌发言", description="验证失败提醒（控制台显示）"),
@@ -443,6 +455,8 @@ class OwnerAuthPlugin(BasePlugin):
         super().__init__(**kwargs)
         debug_cfg = self.get_config("debug.enable_debug", False)
         debug_enabled = bool(debug_cfg)
+        enable_private_inject = bool(self.get_config("owner_auth.enable_private_inject", True))
+        plugin_enabled = bool(self.get_config("plugin.enabled", True))
         self._dynamic_generate_config_fields()
         if bool(self.get_config("plugin.auto_install_deps", True)):
             for spec in self.python_dependencies or []:
@@ -450,11 +464,16 @@ class OwnerAuthPlugin(BasePlugin):
                     _bootstrap_install_if_missing(spec)
                 except Exception as e:
                     print(f"[用户验证插件] 自动安装依赖失败：{e}")
-        
+
         # 重新初始化 patch_manager（传入完整的函数）
         if patch_manager is not None:
-            patch_manager.init_patch_manager(logger, get_all_auth_info, debug_enabled)
-        
+            patch_manager.init_patch_manager(logger, get_all_auth_info, debug_enabled, enable_private_inject)
+
+        # 只有插件启用时才应用补丁
+        if not plugin_enabled:
+            logger.info("[用户验证插件] 插件已禁用，跳过补丁应用")
+            return
+
         # 应用monkey patching以注入提示词
         try:
             if apply_owner_auth_patch():
@@ -476,8 +495,8 @@ class OwnerAuthPlugin(BasePlugin):
                 section_key = f"user{i}"
                 if section_key not in self.config_schema:
                     # 添加节描述
-                    self.config_section_descriptions[section_key] = f"第{i}个用户的配置（昵称、QQ号、提示词模板）"
-                    
+                    self.config_section_descriptions[section_key] = ConfigSection(title=f"用户{i}配置", description=f"第{i}个用户的配置", icon="user", collapsed=True, order=3+i) if ConfigSection else f"第{i}个用户的配置"
+
                     # 添加schema定义
                     self.config_schema[section_key] = {
                         "nickname": ConfigField(type=str, default="用户", description="用户的昵称"),
@@ -490,6 +509,11 @@ class OwnerAuthPlugin(BasePlugin):
                             rows=6
                         )
                     }
+                    # 动态更新 config_layout 的 users 标签页
+                    if self.config_layout and hasattr(self.config_layout, 'tabs'):
+                        for tab in self.config_layout.tabs:
+                            if tab.id == "users" and section_key not in tab.sections:
+                                tab.sections.append(section_key)
                     logger.info(f"[用户验证插件] 已动态添加 [{section_key}] 节到 config_schema")
             
             # 清理多余的schema节（如果User从3改回1）
@@ -499,6 +523,11 @@ class OwnerAuthPlugin(BasePlugin):
                     del self.config_schema[section_key]
                     if section_key in self.config_section_descriptions:
                         del self.config_section_descriptions[section_key]
+                    # 从 config_layout 的 users 标签页中移除
+                    if self.config_layout and hasattr(self.config_layout, 'tabs'):
+                        for tab in self.config_layout.tabs:
+                            if tab.id == "users" and section_key in tab.sections:
+                                tab.sections.remove(section_key)
                     logger.info(f"[用户验证插件] 已从 config_schema 中移除 [{section_key}] 节")
             
             # 检查配置文件中是否需要添加或删除字段

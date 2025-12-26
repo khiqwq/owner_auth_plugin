@@ -19,15 +19,17 @@ _patch_applied = False
 _logger = None
 _debug_enabled = False
 _get_all_auth_info = None
+_enable_private_inject = True
 
-def init_patch_manager(logger, get_all_auth_info_func, debug_enabled=False):
+def init_patch_manager(logger, get_all_auth_info_func, debug_enabled=False, enable_private_inject=True):
     """初始化补丁管理器"""
-    global _logger, _get_all_auth_info, _debug_enabled
+    global _logger, _get_all_auth_info, _debug_enabled, _enable_private_inject
     _logger = logger
     _get_all_auth_info = get_all_auth_info_func
     _debug_enabled = debug_enabled
+    _enable_private_inject = enable_private_inject
     if _logger:
-        _logger.debug(f"[用户验证补丁] patch_manager 已初始化，debug={debug_enabled}")
+        _logger.debug(f"[用户验证补丁] patch_manager 已初始化，debug={debug_enabled}, private_inject={enable_private_inject}")
 
 def debug_log(msg: str) -> None:
     """条件调试日志"""
@@ -222,8 +224,12 @@ def apply_patch() -> bool:
             # 调用原始方法
             result = await _original_format_prompt(name, **kwargs)
             
-            # 只在 replyer_prompt 或 replyer_prompt_0 时注入
-            if name in ("replyer_prompt", "replyer_prompt_0"):
+            # 只在 replyer_prompt 或 replyer_prompt_0 或 private_replyer_prompt 时注入
+            if name in ("replyer_prompt", "replyer_prompt_0", "private_replyer_prompt"):
+                # 私聊环境检查
+                if name == "private_replyer_prompt" and not _enable_private_inject:
+                    return result
+
                 # 从 kwargs 获取 sender_name
                 sender_name = kwargs.get("sender_name", "")
                 
