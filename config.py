@@ -38,7 +38,7 @@ class OwnerAuthConfig(PluginConfigBase):
     enable_private_inject: bool = Field(default=True, description="是否在私聊中注入身份验证提示词")
     log_auth_result: bool = Field(default=True, description="是否记录验证结果")
     cache_ttl_seconds: int = Field(default=300, ge=10, le=3600, description="身份验证缓存有效期，单位秒")
-    success_message: str = Field(default="检测到用户身份，麦麦为您服务！", description="验证成功提示")
+    success_message: str = Field(default="检测到用户身份，为您服务！", description="验证成功提示")
     failure_message: str = Field(default="此人不是用户，请斟酌发言", description="验证失败提示")
     non_owner_prompt_template: str = Field(
         default=(

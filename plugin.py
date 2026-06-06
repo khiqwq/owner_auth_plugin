@@ -313,11 +313,22 @@ class OwnerAuthPlugin(MaiBotPlugin):
         self._store_auth_info(info)
         if self.config.owner_auth.log_auth_result:
             if info.is_owner:
-                self.ctx.logger.info("用户验证成功: %s(%s)", info.owner_nickname or info.display_name, info.user_id)
+                success_msg = self.config.owner_auth.success_message or "用户验证成功"
+                self.ctx.logger.info("%s: %s(%s)", success_msg, info.owner_nickname or info.display_name, info.user_id)
             else:
-                self.ctx.logger.info("用户验证失败: %s(%s) 不是已配置用户", info.display_name, info.user_id)
+                failure_msg = self.config.owner_auth.failure_message or "用户验证失败"
+                self.ctx.logger.info("%s: %s(%s) 不是已配置用户", failure_msg, info.display_name, info.user_id)
 
-        if self.config.debug.enable_debug or self.config.debug.show_detailed_info:
+        if self.config.debug.show_detailed_info:
+            self.ctx.logger.info(
+                "身份缓存: session=%s message=%s private=%s owner=%s text=%r",
+                info.session_id,
+                info.message_id,
+                info.is_private,
+                info.is_owner,
+                info.user_message[:120],
+            )
+        elif self.config.debug.enable_debug:
             self.ctx.logger.debug(
                 "身份缓存: session=%s message=%s private=%s owner=%s text=%r",
                 info.session_id,
@@ -370,9 +381,18 @@ class OwnerAuthPlugin(MaiBotPlugin):
                 prompt_chars=len(prompt),
             )
 
-        if self.config.debug.enable_debug:
+        if self.config.debug.show_detailed_info:
+            self.ctx.logger.info(
+                "已注入身份提示词至 replyer: session=%s reply_message=%s user=%s owner=%s. 注入内容:\n%s",
+                session_id,
+                reply_message_id,
+                info.user_id,
+                info.is_owner,
+                prompt,
+            )
+        elif self.config.debug.enable_debug:
             self.ctx.logger.debug(
-                "已注入身份提示词: session=%s reply_message=%s user=%s owner=%s",
+                "已注入身份提示词至 replyer: session=%s reply_message=%s user=%s owner=%s",
                 session_id,
                 reply_message_id,
                 info.user_id,
@@ -387,6 +407,72 @@ class OwnerAuthPlugin(MaiBotPlugin):
                 reply_message_id or "最近消息",
             )
         return {"action": "continue", "modified_kwargs": kwargs}
+
+    @HookHandler(
+        "maisaka.planner.before_request",
+        name="owner_auth_inject_planner_prompt",
+        description="在 planner 请求前注入 QQ 身份验证提示词",
+        mode=HookMode.BLOCKING,
+        order=HookOrder.EARLY,
+        timeout_ms=3000,
+        error_policy=ErrorPolicy.SKIP,
+    )
+    async def inject_planner_prompt(self, **kwargs: Any) -> dict[str, Any] | None:
+        if not self.config.plugin.enabled or not self.config.owner_auth.enable_auth:
+            return None
+
+        session_id = str(kwargs.get("session_id") or "").strip()
+        info = self._lookup_auth_info(session_id, "")
+        if info is None:
+            return None
+
+        if info.is_private and not self.config.owner_auth.enable_private_inject:
+            return None
+
+        prompt = self._render_prompt(info)
+        if not prompt:
+            return None
+
+        messages = kwargs.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return None
+
+        system_idx = -1
+        for i, msg in enumerate(messages):
+            if isinstance(msg, dict) and msg.get("role") == "system":
+                system_idx = i
+                break
+
+        if system_idx != -1:
+            content = messages[system_idx].get("content") or ""
+            if isinstance(content, str):
+                messages[system_idx]["content"] = f"{content}\n\n{prompt}".strip()
+        else:
+            messages.insert(0, {"role": "system", "content": prompt})
+
+        if self.config.debug.show_detailed_info:
+            self.ctx.logger.info(
+                "已注入身份提示词至 planner: session=%s user=%s owner=%s. 注入内容:\n%s",
+                session_id,
+                info.user_id,
+                info.is_owner,
+                prompt,
+            )
+        elif self.config.debug.enable_debug:
+            self.ctx.logger.debug(
+                "已注入身份提示词至 planner: session=%s user=%s owner=%s",
+                session_id,
+                info.user_id,
+                info.is_owner,
+            )
+        if self.config.owner_auth.log_auth_result:
+            self.ctx.logger.info(
+                "身份提示词已注入 planner: user=%s owner=%s session=%s",
+                self._mask_user_id(info.user_id),
+                info.is_owner,
+                session_id or "未知",
+            )
+        return {"action": "continue", "modified_kwargs": {"messages": messages}}
 
     @Command(
         "owner_auth_status",
