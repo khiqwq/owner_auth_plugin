@@ -4,7 +4,7 @@
 >
 > **v2.1.0** 面向 **MaiBot 1.0.x / maibot_sdk 2.x** 完全重写（官方 Hook 注入，无 monkey-patch、无全局缓存、无第三方依赖，Windows / Linux 通用）。旧版（0.x，monkey-patch）在 1.0 下无法加载，请整体替换。
 >
-> 🤖 本次 MaiBot 1.0 重写由 [Claude](https://github.com/anthropics) 协助完成——欢迎更好的思路与实现前来提 PR / Issue。
+> 🤖 本次 MaiBot 1.0 重写由 [Claude](https://github.com/claude) 协助完成——欢迎更好的思路与实现前来提 PR / Issue。
 
 ---
 
@@ -250,4 +250,4 @@ A：整体替换插件文件夹即可，旧 `config.toml` 会自动迁移（见[
 
 GPL-3.0-or-later。原作者：[风花叶](https://github.com/khiqwq)。
 
-v2.1.0（MaiBot 1.0 重写）由 [Claude](https://github.com/anthropics) 协助编写。**欢迎带着更好的思路、实现或修复前来提 PR / Issue**——无论是性能、安全、还是 WebUI 体验。
+v2.1.0（MaiBot 1.0 重写）由 [Claude](https://github.com/claude) 协助编写。**欢迎带着更好的思路、实现或修复前来提 PR / Issue**——无论是性能、安全、还是 WebUI 体验。
