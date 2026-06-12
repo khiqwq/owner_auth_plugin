@@ -1,0 +1,6 @@
+# 运行期生成 / 本地文件，不纳入版本库（插件首次加载会按 config_model 自动生成 config.toml）
+config.toml
+config_back/
+__pycache__/
+*.py[cod]
+.DS_Store
